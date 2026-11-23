@@ -1,0 +1,23 @@
+# Cloudflare Workers 배포 설정
+# 1) npm i -g wrangler && wrangler login
+# 2) wrangler secret put DATA_GO_KR_KEY   (공공데이터포털 일반 인증키 Decoding 값)
+# 3) wrangler secret put LLM_API_KEY      (Anthropic API 키)
+# 4) 아래 ALLOWED_ORIGINS를 내 GitHub Pages 주소로 바꾼 뒤  wrangler deploy
+
+name = "diet-proxy"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[vars]
+# 쉼표로 구분. 끝에 / 없이, 경로 없이 (https://아이디.github.io)
+ALLOWED_ORIGINS = "https://chiks33-hub.github.io,http://localhost:8000"
+LLM_MODEL = "claude-haiku-5-5"
+# 공공 DB에 없는 음식은 Claude가 웹 검색으로 공식 영양성분표를 찾음 ("0"이면 검색 없이 추정만)
+LLM_WEB_SEARCH = "1"
+DAILY_LIMIT = "300"
+
+# (선택) 조회 수 제한을 정확히 하려면 KV를 만들어 연결:
+#   wrangler kv namespace create RATE_KV
+# [[kv_namespaces]]
+# binding = "RATE_KV"
+# id = "여기에_생성된_id"
