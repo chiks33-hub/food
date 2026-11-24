@@ -78,6 +78,12 @@ export function computeTargets(p) {
   return { bmi, bmr, recommended, target, locked, ratio, grams };
 }
 
+/** 운동 추천 등에서 쓰는 기본 정보 */
+export function getProfileBasics() {
+  const p = profile || {};
+  return { goal: p.goal || 'maintain', sex: p.sex || null, age: p.age || null, weight_kg: p.weight_kg || null };
+}
+
 /** 평가 등에서 쓰는 목표 이름 (유지/감량/증량) */
 export function getGoalLabel() {
   return (GOALS.find((g) => g.value === (profile && profile.goal)) || GOALS[0]).label;

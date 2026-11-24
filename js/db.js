@@ -25,7 +25,7 @@ async function migrateLocalToCloud() {
   try {
     await idb.openDB();
     const data = await idb.exportAll();
-    if (data.logs.length || data.foods.length || data.profile || data.weights.length) {
+    if (data.logs.length || data.foods.length || data.profile || data.weights.length || (data.workouts || []).length) {
       await cloud.importAll(data);
       console.info(`기기에 있던 기록 ${data.logs.length}줄을 Claude 계정 저장소로 옮겼어요.`);
     }
@@ -66,3 +66,6 @@ export const putProfile = (...a) => impl.putProfile(...a);
 export const getWeights = (...a) => impl.getWeights(...a);
 export const putWeight = (...a) => impl.putWeight(...a);
 export const deleteWeight = (...a) => impl.deleteWeight(...a);
+export const getWorkout = (...a) => impl.getWorkout(...a);
+export const getWorkoutsInRange = (...a) => impl.getWorkoutsInRange(...a);
+export const putWorkout = (...a) => impl.putWorkout(...a);

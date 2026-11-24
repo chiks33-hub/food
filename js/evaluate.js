@@ -136,7 +136,7 @@ function logLine(l) {
   return `${l.food_name} ${g} ${kcal}${mac}${est}`.replace(/\s+/g, ' ').trim();
 }
 
-function buildPrompt(ctx) {
+function buildPrompt(ctx, workoutLine = '') {
   const t = getTargets();
   const head = [
     '너는 친절하지만 솔직한 영양 코치다. 아래 식단 기록을 평가해라.',
@@ -154,6 +154,7 @@ function buildPrompt(ctx) {
       lines.push(`${MEAL_LABEL[m]}: ${rows.length ? rows.map(logLine).join(', ') : '기록 없음'}`);
     }
     lines.push(`합계: ${fmtInt(sumKcal(ctx.logs))} kcal`);
+    if (workoutLine) lines.push(`운동: ${workoutLine}`);
     return [...head, ...lines].join('\n');
   }
   const lines = [`[기간: ${ctx.label}]`];
@@ -256,7 +257,13 @@ export async function renderEvalCard(container, ctx) {
       btn.disabled = true;
       status.textContent = 'Claude가 평가하는 중… (보통 10~30초)';
       try {
-        const v = await sampler.json(buildPrompt(ctx), { modelTier: 'default', cache: false });
+        let workoutLine = '';
+        if (ctx.kind === 'day') {
+          const w = await db.getWorkout(ctx.date);
+          const done = ((w && w.plan && w.plan.items) || []).filter((i) => i.done).map((i) => i.name);
+          workoutLine = done.length ? `${done.join(', ')} 완료` : '기록 없음';
+        }
+        const v = await sampler.json(buildPrompt(ctx, workoutLine), { modelTier: 'default', cache: false });
         const res = cleanResult(v);
         if (!res || (!res.summary && !res.good.length && !res.improve.length)) throw { code: 'invalid_json' };
         await save(ctx.key, { hash: fp, result: res, at: Date.now() });

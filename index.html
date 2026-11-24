@@ -55,12 +55,19 @@
       <button id="day-next" class="icon-btn" type="button" aria-label="다음 날">›</button>
     </header>
     <div id="day-scroll" class="scroll day-scroll">
-      <section id="day-charts" class="card day-charts" aria-label="그래프"></section>
-      <section class="card table-card">
-        <div id="day-table"></div>
-        <p class="hint table-hint">마지막 줄에 바로 입력 · "제육볶음 200g", "바나나 1개", "김밥 반" · Enter 다음 줄 · 왼쪽으로 밀면 삭제 · kcal을 길게 눌러 수정</p>
-      </section>
-      <section id="day-eval" class="card eval-card" aria-label="식단 평가"></section>
+      <div class="day-grid">
+        <div class="day-main">
+          <section id="day-charts" class="card day-charts" aria-label="그래프"></section>
+          <section class="card table-card">
+            <div id="day-table"></div>
+            <p class="hint table-hint">빈 줄에 바로 입력 · "제육볶음 200g", "바나나 1개", "김밥 반" · Enter 다음 줄 · × 또는 왼쪽으로 밀어 삭제 · kcal을 길게 눌러 수정</p>
+          </section>
+        </div>
+        <aside class="day-side">
+          <section id="day-workout" class="card wo-card" aria-label="오늘의 운동"></section>
+          <section id="day-eval" class="card eval-card" aria-label="식단 평가"></section>
+        </aside>
+      </div>
     </div>
   </section>
 

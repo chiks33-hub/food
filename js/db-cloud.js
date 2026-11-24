@@ -9,6 +9,7 @@
 //   data/users/<id>/settings            설정 { values: {key: value} }
 //   data/users/<id>/app/days/<날짜>      그날 기록 { date, logs: [...] }  (하루 = 문서 1개)
 //   data/users/<id>/app/foods/f<id>     음식 영양값 캐시 1건
+//   data/users/<id>/app/workouts/<날짜>  그날 운동 계획과 체크
 //
 // 시작할 때 전부 메모리로 읽고(개인 기록 규모라 가벼움), 읽기는 메모리에서,
 // 쓰기는 메모리에 바로 반영한 뒤 문서 단위로 모아서(0.4초) 저장합니다.
@@ -29,6 +30,7 @@ const mem = {
   byDate: new Map(),  // date → Set(id)
   profile: null,
   weights: [],        // [{id, date, weight_kg}]
+  workouts: new Map(), // date → {date, plan, ...}
   settings: {},
 };
 
@@ -83,12 +85,13 @@ async function getAllDocs(collectionPath, orderField) {
 }
 
 async function loadAll() {
-  const [profileSnap, weightsSnap, settingsSnap, days, foods] = await Promise.all([
+  const [profileSnap, weightsSnap, settingsSnap, days, foods, workouts] = await Promise.all([
     store.doc(`${base}/profile`).get(),
     store.doc(`${base}/weights`).get(),
     store.doc(`${base}/settings`).get(),
     getAllDocs(`${base}/app/days`, 'date'),
     getAllDocs(`${base}/app/foods`, 'id'),
+    getAllDocs(`${base}/app/workouts`, 'date'),
   ]);
   mem.profile = profileSnap.exists ? clone(profileSnap.data()) : null;
   mem.weights = weightsSnap.exists && Array.isArray(weightsSnap.data().list) ? clone(weightsSnap.data().list) : [];
@@ -101,6 +104,8 @@ async function loadAll() {
   mem.foods.clear();
   mem.foodKeys.clear();
   for (const f of foods) indexFood(clone(f));
+  mem.workouts.clear();
+  for (const w of workouts) mem.workouts.set(w.date, clone(w));
 }
 
 /** 다른 기기에서 바뀐 내용을 다시 읽음 (저장 대기 중이면 건너뜀) */
@@ -111,11 +116,12 @@ export async function reload() {
 }
 
 export function isEmpty() {
-  return mem.logs.size === 0 && mem.foods.size === 0 && !mem.profile && mem.weights.length === 0;
+  return mem.logs.size === 0 && mem.foods.size === 0 && !mem.profile && mem.weights.length === 0 && mem.workouts.size === 0;
 }
 
 /** 기기 저장소에 있던 기록을 한 번에 옮겨 넣음 */
-export async function importAll({ foods = [], logs = [], profile = null, weights = [], settings = [] }) {
+export async function importAll({ foods = [], logs = [], profile = null, weights = [], settings = [], workouts = [] }) {
+  for (const w of workouts) { mem.workouts.set(w.date, clone(w)); schedule(workoutPath(w.date), () => mem.workouts.get(w.date) || null); }
   for (const f of foods) { indexFood(clone(f)); schedule(foodPath(f.id), () => foodBody(f.id)); }
   for (const l of logs) { indexLog(clone(l)); scheduleDay(l.date); }
   if (profile) { mem.profile = clone(profile); schedule(`${base}/profile`, () => mem.profile); }
@@ -190,6 +196,7 @@ export async function flush() {
 
 const dayPath = (date) => `${base}/app/days/${date}`;
 const foodPath = (id) => `${base}/app/foods/f${id}`;
+const workoutPath = (date) => `${base}/app/workouts/${date}`;
 
 function dayBody(date) {
   const ids = mem.byDate.get(date);
@@ -328,4 +335,17 @@ export async function putWeight(date, weightKg) {
 export async function deleteWeight(id) {
   mem.weights = mem.weights.filter((w) => w.id !== id);
   scheduleWeights();
+}
+
+export async function getWorkout(date) {
+  return clone(mem.workouts.get(date)) || undefined;
+}
+export async function getWorkoutsInRange(start, end) {
+  return [...mem.workouts.values()].filter((w) => w.date >= start && w.date <= end).map(clone)
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+}
+export async function putWorkout(rec) {
+  mem.workouts.set(rec.date, clone(rec));
+  schedule(workoutPath(rec.date), () => mem.workouts.get(rec.date) || null);
+  return rec.date;
 }

@@ -4,12 +4,13 @@
 // meal_logs   : 일별 표의 한 줄. date, lookup_status 인덱스
 // profile     : 내 정보 1건 (id = 'me')
 // weight_logs : 체중 기록. date(unique)
-// settings    : key-value (seed_version, migrated_from 등)
+// settings    : key-value (seed_version, migrated_from, evals 등)
+// workouts    : 하루 운동 계획과 체크 (keyPath date)
 
 import { nameKey } from './util.js';
 
 const DB_NAME = 'diet-log';
-const DB_VERSION = 2;
+const DB_VERSION = 3; // v3: workouts(운동 체크) 추가
 
 let db = null;
 
@@ -57,6 +58,7 @@ function upgrade(d, tx, oldVersion) {
     w.createIndex('date', 'date', { unique: true });
   }
   if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings', { keyPath: 'key' });
+  if (!d.objectStoreNames.contains('workouts')) d.createObjectStore('workouts', { keyPath: 'date' });
 
   if (oldVersion === 1) {
     migrateV1(foods, logs, tx.objectStore('settings'));
@@ -276,14 +278,26 @@ export function deleteWeight(id) {
   return del('weight_logs', id);
 }
 
+/* ===== workouts (하루 운동 계획 + 체크) ===== */
+export function getWorkout(date) {
+  return reqP(store('workouts').get(date));
+}
+export function getWorkoutsInRange(start, end) {
+  return reqP(store('workouts').getAll(IDBKeyRange.bound(start, end)));
+}
+export function putWorkout(rec) {
+  return put('workouts', rec);
+}
+
 /* ===== 전체 읽기 (Claude 계정 저장소로 옮길 때 사용) ===== */
 export async function exportAll() {
-  const [foods, logs, profile, weights, settings] = await Promise.all([
+  const [foods, logs, profile, weights, settings, workouts] = await Promise.all([
     reqP(store('foods').getAll()),
     reqP(store('meal_logs').getAll()),
     reqP(store('profile').get('me')),
     getWeights(),
     reqP(store('settings').getAll()),
+    reqP(store('workouts').getAll()),
   ]);
-  return { foods, logs, profile: profile || null, weights, settings };
+  return { foods, logs, profile: profile || null, weights, settings, workouts };
 }

@@ -7,7 +7,7 @@
  * - 프록시(다른 도메인) 요청은 건드리지 않음 → 항상 네트워크
  * 파일을 바꿔 배포할 때는 CACHE_VERSION을 올려야 기기에 반영된다.
  * ========================================================= */
-const CACHE_VERSION = 'v12';
+const CACHE_VERSION = 'v13';
 const CACHE_NAME = `diet-log-${CACHE_VERSION}`;
 
 const APP_SHELL = [
@@ -30,6 +30,7 @@ const APP_SHELL = [
   './js/profile.js',
   './js/stats.js',
   './js/evaluate.js',
+  './js/workout.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',

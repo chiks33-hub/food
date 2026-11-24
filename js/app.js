@@ -9,6 +9,7 @@ import { initDayCharts, updateDayCharts, resetDayCharts } from './day-charts.js'
 import { loadProfile, initProfile, refreshProfileView } from './profile.js';
 import { initStats, render as renderStats } from './stats.js';
 import { renderEvalCard, dayContext } from './evaluate.js';
+import { renderWorkoutCard } from './workout.js';
 import {
   $, $$, el, toast, onChange, todayStr, addDays, formatDateLabel, isValidDateStr, nameKey,
 } from './util.js';
@@ -57,6 +58,7 @@ function showDayUI(date) {
   $('.views').inert = true; // 메뉴바는 계속 누를 수 있게 둠
   setSelected(date);
   showDate(date);
+  renderWorkoutCard($('#day-workout'), date);
   if (opening) $('#day-scroll').scrollTop = 0;
 }
 
@@ -217,7 +219,10 @@ function bindEvents() {
     } else if (detail.kind === 'profile' || detail.kind === 'weights') {
       scheduleCalendar();
       scheduleStats();
-      if (state.day) updateDayCharts(currentLogs());
+      if (state.day) {
+        updateDayCharts(currentLogs());
+        renderWorkoutCard($('#day-workout'), state.day);
+      }
     }
   });
 
@@ -278,7 +283,7 @@ function bindCloudSync() {
     refreshProfileView();
     db.getAllLogs().then(buildFreq).catch(() => {});
     renderCalendar();
-    if (state.day) showDate(state.day);
+    if (state.day) { showDate(state.day); renderWorkoutCard($('#day-workout'), state.day); }
     dirty.stats = true;
     if (state.tab === 'stats' && !state.day) { dirty.stats = false; renderStats(); }
   };
