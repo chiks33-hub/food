@@ -1,8 +1,9 @@
 // 오늘의 운동: 요일별 추천(헬스 루틴 + 러닝 km)과 체크박스
 //
-// - 기본 추천(규칙): 요일별 분할 + 목표(감량/유지/증량)에 따른 러닝 거리.
-//   러닝 거리는 최근 2주 동안 완료한 러닝을 기준으로 10%씩 늘림(최대 10km, 장거리 15km).
-// - AI 추천(버튼): claude.ai 아티팩트로 열었을 때 Claude가 그날 맞춤 운동을 짜 줌.
+// - AI 추천(기본): claude.ai 아티팩트로 열면, 오늘 계획이 아직 없을 때 Claude가 자동으로 짜고 저장.
+//   최근 7일(빈 날 포함)의 완료 운동·계획, 어제와 오늘 섭취량을 보고 부위가 겹치지 않게 고름.
+// - 규칙 추천(대체): Claude를 쓸 수 없거나 실패하면 요일별 분할 + 목표별 러닝 거리.
+//   어제 같은 부위를 했으면 다른 부위로 바꾸고, 러닝 거리는 최근 2주 완료 기록에서 10%씩 늘림.
 // - 체크하거나 AI 추천을 받으면 그날 계획이 저장되어 고정됨(db.putWorkout).
 
 import * as db from './db.js';
@@ -79,9 +80,18 @@ function item(kind, name, detail, extra = {}) {
   return { id: `${kind}-${Math.random().toString(36).slice(2, 8)}`, kind, name, detail, done: false, ...extra };
 }
 
+const STRENGTH = ['upper', 'lower', 'back'];
+
 export async function rulePlan(date) {
   const { goal } = getProfileBasics();
-  const type = dayType(parseDateStr(date).getDay(), goal || 'maintain');
+  let type = dayType(parseDateStr(date).getDay(), goal || 'maintain');
+  // 어제 같은 부위를 실제로 했으면 다른 부위로
+  if (STRENGTH.includes(type)) {
+    const y = await db.getWorkout(addDays(date, -1));
+    const yType = y && y.plan && y.plan.type;
+    const yDone = y && y.plan && (y.plan.items || []).some((i) => i.kind === 'strength' && i.done);
+    if (yDone && yType === type) type = STRENGTH[(STRENGTH.indexOf(type) + 1) % STRENGTH.length];
+  }
   const items = [];
   let title;
   if (type === 'rest') {
@@ -106,7 +116,7 @@ export async function rulePlan(date) {
       items.push(item('run', `마무리 러닝 ${km}km`, '편한 속도', { km }));
     }
   }
-  return { title, items, source: 'rule' };
+  return { title, items, type, source: 'rule' };
 }
 
 /* =========================================================
@@ -118,17 +128,31 @@ async function aiPlan(date) {
   const b = getProfileBasics();
   const t = getTargets();
   const recent = await db.getWorkoutsInRange(addDays(date, -7), addDays(date, -1));
-  const history = recent.map((w) => {
-    const done = ((w.plan && w.plan.items) || []).filter((i) => i.done).map((i) => i.name);
-    return `${w.date.slice(5)}: ${done.length ? done.join(', ') : '안 함'}`;
-  });
-  const logs = await db.getLogsByDate(date);
-  const eaten = logs.reduce((s, l) => s + (isNum(l.kcal) ? l.kcal : 0), 0);
+  const byDate = new Map(recent.map((w) => [w.date, w]));
+  const history = [];
+  for (let i = 7; i >= 1; i--) {
+    const d = addDays(date, -i);
+    const w = byDate.get(d);
+    const items = (w && w.plan && w.plan.items) || [];
+    const done = items.filter((x) => x.done).map((x) => x.name);
+    let text;
+    if (!w) text = '기록 없음';
+    else if (done.length) text = `${done.join(', ')} 완료`;
+    else text = `계획(${w.plan.title})만 있고 체크 없음`;
+    history.push(`${d.slice(5)}(${WEEKDAY[parseDateStr(d).getDay()]}): ${text}`);
+  }
+  const sum = (arr) => arr.reduce((s, l) => s + (isNum(l.kcal) ? l.kcal : 0), 0);
+  const [logs, yLogs] = await Promise.all([db.getLogsByDate(date), db.getLogsByDate(addDays(date, -1))]);
+  const eaten = sum(logs);
+  const yEaten = sum(yLogs);
   const prompt = [
     '너는 헬스 트레이너다. 아래 사람의 오늘 운동을 헬스장 운동과 러닝 위주로 짜라.',
     `목표: ${getGoalLabel()}${b.sex ? `, 성별: ${b.sex === 'male' ? '남' : '여'}` : ''}${b.age ? `, 나이: ${b.age}` : ''}${b.weight_kg ? `, 체중: ${b.weight_kg}kg` : ''}${t.bmi ? `, BMI: ${t.bmi}` : ''}`,
     `오늘: ${date} (${WEEKDAY[parseDateStr(date).getDay()]}요일), 오늘 섭취 ${fmtInt(eaten)} kcal / 권장 ${t.target ? fmtInt(t.target) : '모름'} kcal`,
-    `최근 7일 완료한 운동: ${history.length ? history.join(' / ') : '기록 없음'}`,
+    `어제 섭취 ${yLogs.length ? `${fmtInt(yEaten)} kcal` : '기록 없음'}`,
+    `최근 7일 운동(오래된 순):`,
+    ...history,
+    '"기록 없음"은 앱에 적지 않은 날이라 쉬었는지 알 수 없음. 어제 한 부위는 오늘 피하고, 연속으로 쉬었으면 가볍게 시작.',
     '규칙: 최근에 한 부위는 피해서 고르게. 러닝 거리는 최근 기록보다 10% 넘게 늘리지 말 것(기록 없으면 3km 이하). 무리한 강도·부상 위험 동작은 피할 것.',
     '반드시 JSON 하나만: {"title": "오늘 운동 이름", "items": [{"kind": "strength|run|walk|stretch", "name": "운동 이름", "detail": "세트×횟수나 시간", "km": 러닝일 때 거리 숫자 또는 null}], "note": "한 줄 조언"}',
     'items는 3~7개, 이름과 설명은 짧은 한국어로.',
@@ -156,6 +180,7 @@ async function aiPlan(date) {
  * 카드
  * ========================================================= */
 let renderToken = 0;
+const autoTried = new Set(); // 이번 실행에서 자동 AI 추천을 시도한 날짜
 
 export async function renderWorkoutCard(container, date) {
   if (!container) return;
@@ -164,6 +189,26 @@ export async function renderWorkoutCard(container, date) {
   const plan = saved && saved.plan ? saved.plan : await rulePlan(date);
   const sampler = await getSampler();
   if (my !== renderToken) return;
+
+  // 오늘 계획이 아직 없으면 Claude가 자동으로 짬 (하루 한 번, 저장 후 고정)
+  const autoNow = !saved && date === todayStr() && sampler && !autoTried.has(date);
+  if (autoNow) {
+    autoTried.add(date);
+    aiPlan(date)
+      .then(async (next) => {
+        const again = await db.getWorkout(date);
+        if (again && again.plan) return; // 그 사이 사용자가 체크해서 저장됨
+        await db.putWorkout({ date, plan: next, updated_at: Date.now() });
+        emitChange({ kind: 'workouts', date });
+        if (container.isConnected) renderWorkoutCard(container, date);
+      })
+      .catch(() => {
+        if (container.isConnected) {
+          const st = container.querySelector('.eval-status');
+          if (st) st.textContent = 'AI 추천을 받지 못해 요일별 기본 추천을 보여 드려요.';
+        }
+      });
+  }
 
   const isToday = date === todayStr();
   const doneCount = plan.items.filter((i) => i.done).length;
@@ -192,14 +237,15 @@ export async function renderWorkoutCard(container, date) {
           el('small', { textContent: [it.detail, kcal ? `약 ${fmtInt(kcal)} kcal` : ''].filter(Boolean).join(' · ') }))));
   }));
 
-  const aiBtn = el('button', { type: 'button', className: 'wo-ai', textContent: 'AI 추천', hidden: !sampler });
+  const aiBtn = el('button', { type: 'button', className: 'wo-ai', textContent: plan.source === 'ai' ? '다시 추천' : 'AI 추천', hidden: !sampler });
   const status = el('p', { className: 'eval-status', 'aria-live': 'polite' });
+  if (autoNow) status.textContent = 'Claude가 어제까지 기록을 보고 오늘 운동을 짜는 중… (10~30초)';
   aiBtn.addEventListener('click', async () => {
     const hasChecks = plan.items.some((i) => i.done);
     if (hasChecks && !aiBtn.dataset.armed) {
       aiBtn.dataset.armed = '1';
       aiBtn.textContent = '체크가 지워져요. 한 번 더';
-      setTimeout(() => { if (aiBtn.isConnected) { delete aiBtn.dataset.armed; aiBtn.textContent = 'AI 추천'; } }, 3000);
+      setTimeout(() => { if (aiBtn.isConnected) { delete aiBtn.dataset.armed; aiBtn.textContent = plan.source === 'ai' ? '다시 추천' : 'AI 추천'; } }, 3000);
       return;
     }
     aiBtn.disabled = true;
@@ -230,7 +276,7 @@ export async function renderWorkoutCard(container, date) {
       el('h2', { className: 'card-title', textContent: isToday ? '오늘의 운동' : `${WEEKDAY[parseDateStr(date).getDay()]}요일 운동` }),
       aiBtn),
     el('div', { className: 'wo-sub' },
-      el('span', { className: 'wo-plan', textContent: `${plan.title}${plan.source === 'ai' ? ' · AI 추천' : ''}` }),
+      el('span', { className: 'wo-plan', textContent: `${plan.title}${plan.source === 'ai' ? ' · AI 추천' : ' · 기본 추천'}` }),
       el('span', { className: `wo-progress${doneCount === plan.items.length ? ' all' : ''}`, textContent: `${doneCount}/${plan.items.length} 완료${burn ? ` · 러닝 약 ${fmtInt(burn)} kcal` : ''}` })),
     list,
     plan.note ? el('p', { className: 'wo-note', textContent: plan.note }) : null,
