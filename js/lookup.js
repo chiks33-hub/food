@@ -166,7 +166,7 @@ async function fetchProxy(query) {
  * GitHub Pages 등 일반 브라우저에서는 window.claude가 없어 바로 null. */
 let samplerPromise = null;
 let samplerDisabled = false;
-function getSampler() {
+export function getSampler() {
   if (samplerDisabled || typeof window === 'undefined' || !window.claude || typeof window.claude.use !== 'function') {
     return Promise.resolve(null);
   }

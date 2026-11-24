@@ -6,6 +6,7 @@
 
 import * as db from './db.js';
 import { getTargets } from './profile.js';
+import { renderEvalCard, periodContext } from './evaluate.js';
 import {
   $, el, cssVar, loadChart, todayStr, addDays, weekStart, monthStart, monthEnd, addMonths, dateRange, shortDate,
   weekday, formatMonthLabel, fmtInt, fmt1, isNum, parseDateStr,
@@ -34,7 +35,8 @@ export function initStats(container) {
         el('div', {}, el('span', { className: 'muted', textContent: '기록한 날' }), el('b', { id: 'st-days', textContent: '–' }))),
       card('일별 칼로리', 'st-kcal', '막대: 섭취 · 점선: 권장'),
       card('자주 먹은 음식 TOP 10', 'st-top', null, 'st-top-box'),
-      card('체중 추이', 'st-weight')));
+      card('체중 추이', 'st-weight'),
+      el('section', { className: 'card eval-card', id: 'st-eval', 'aria-label': '기간 식단 평가' })));
 
   root.querySelector('.st-mode').addEventListener('click', (e) => {
     const b = e.target.closest('button[data-mode]');
@@ -196,6 +198,10 @@ export async function render() {
   const wEmpty = $('#st-weight-empty', root);
   wEmpty.textContent = '이 기간에는 체중 기록이 없어요. 내 정보에서 기록할 수 있어요.';
   setEmpty('st-weight', wIn.length === 0);
+
+  // 기간 식단 평가
+  const label = $('#st-label', root).textContent;
+  renderEvalCard($('#st-eval', root), periodContext(mode === 'week' ? `${label} 주간` : label, start, end, dates, logs));
 }
 
 function chartOpts(c, { legend = false, stacked = false, yTitle } = {}) {

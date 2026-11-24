@@ -8,6 +8,7 @@ import { SEED_FOODS_JSON } from '../config.js';
 import { initDayCharts, updateDayCharts, resetDayCharts } from './day-charts.js';
 import { loadProfile, initProfile, refreshProfileView } from './profile.js';
 import { initStats, render as renderStats } from './stats.js';
+import { renderEvalCard, dayContext } from './evaluate.js';
 import {
   $, $$, el, toast, onChange, todayStr, addDays, formatDateLabel, isValidDateStr, nameKey,
 } from './util.js';
@@ -323,7 +324,17 @@ async function init() {
   showStorageInfo();
   initStats($('#view-stats'));
   initDayCharts($('#day-charts'));
-  initDayTable($('#day-table'), { onUpdate: (logs) => updateDayCharts(logs) });
+  let evalTimer = 0;
+  initDayTable($('#day-table'), {
+    onUpdate: (logs) => {
+      updateDayCharts(logs);
+      // 평가 카드는 입력이 잠잠해진 뒤 갱신
+      clearTimeout(evalTimer);
+      evalTimer = setTimeout(() => {
+        if (state.day) renderEvalCard($('#day-eval'), dayContext(state.day, logs));
+      }, 400);
+    },
+  });
 
   bindEvents();
   if (db.backend === 'cloud') bindCloudSync();

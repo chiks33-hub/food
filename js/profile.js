@@ -78,6 +78,11 @@ export function computeTargets(p) {
   return { bmi, bmr, recommended, target, locked, ratio, grams };
 }
 
+/** 평가 등에서 쓰는 목표 이름 (유지/감량/증량) */
+export function getGoalLabel() {
+  return (GOALS.find((g) => g.value === (profile && profile.goal)) || GOALS[0]).label;
+}
+
 /** 다른 화면에서 쓰는 현재 목표 */
 export function getTargets() {
   return computeTargets(profile);
