@@ -3,7 +3,7 @@
 
 import * as db from './db.js';
 import {
-  $, el, toast, emitChange, todayStr, isValidDateStr, parseNum, fmtInt, fmt1, formatDateLabel,
+  $, el, toast, emitChange, round, todayStr, isValidDateStr, parseNum, fmtInt, fmt1, formatDateLabel,
 } from './util.js';
 
 export const ACTIVITY = [
@@ -55,7 +55,8 @@ export function computeTargets(p) {
   const w = p && p.weight_kg;
   const age = p && p.age;
   const hasBody = h > 0 && w > 0;
-  const bmi = hasBody ? w / ((h / 100) ** 2) : null;
+  // 화면에 보이는 값(소수 1자리)으로 분류해야 '23.0 정상'처럼 숫자와 배지가 어긋나지 않음
+  const bmi = hasBody ? round(w / ((h / 100) ** 2), 1) : null;
 
   let bmr = null;
   let recommended = null;

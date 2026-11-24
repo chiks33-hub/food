@@ -97,7 +97,7 @@ export const PROXY_URL = 'https://diet-proxy.<계정>.workers.dev';
    CORS 허용 주소에는 경로를 뺀 `https://<아이디>.github.io`만 적습니다.
 4. Android Chrome에서 메뉴 → **홈 화면에 추가**를 누르면 설치됩니다.
 
-**업데이트할 때:** 서비스 워커가 캐시 우선이라, 파일을 바꾸면 `sw.js`의 `CACHE_VERSION`을 올려야 합니다(현재 `v10`). 새 버전은 앱을 연 다음 번 실행부터 보입니다.
+**업데이트할 때:** 서비스 워커가 캐시 우선이라, 파일을 바꾸면 `sw.js`의 `CACHE_VERSION`을 올려야 합니다(현재 `v11`). 새 버전은 앱을 연 다음 번 실행부터 보입니다.
 
 ## 4. 사용법
 
