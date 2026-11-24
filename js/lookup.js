@@ -20,10 +20,19 @@ export const proxyConfigured = () => typeof PROXY_URL === 'string' && /^https?:\
 
 /* ===== 계산 ===== */
 
-/** 양을 g으로. 1회 제공량이 없으면 100g으로 보고 approx=true */
-export function amountToGrams(qty, unit, servingG) {
+/**
+ * 양을 g으로.
+ * - 인분: 1회 제공량(serving_g). 없으면 100g으로 보고 approx
+ * - 개(알·조각): 1개 무게(piece_g). 없으면 1회 제공량, 그것도 없으면 100g으로 보고 approx
+ */
+export function amountToGrams(qty, unit, servingG, pieceG) {
   if (!isNum(qty) || qty <= 0) return { grams: null, approx: false };
   if (unit === 'g') return { grams: qty, approx: false };
+  if (unit === 'piece') {
+    if (isNum(pieceG) && pieceG > 0) return { grams: qty * pieceG, approx: false };
+    if (isNum(servingG) && servingG > 0) return { grams: qty * servingG, approx: true };
+    return { grams: qty * FALLBACK_SERVING_G, approx: true };
+  }
   if (isNum(servingG) && servingG > 0) return { grams: qty * servingG, approx: false };
   return { grams: qty * FALLBACK_SERVING_G, approx: true };
 }
@@ -34,7 +43,7 @@ function statusFromSource(source) {
 
 /** 음식(100g 기준)을 줄에 적용: 양 환산 + 영양값 계산 (log 객체를 직접 수정) */
 export function applyFood(log, food, status) {
-  const { grams, approx } = amountToGrams(log.amount_qty, log.amount_unit, food.serving_g);
+  const { grams, approx } = amountToGrams(log.amount_qty, log.amount_unit, food.serving_g, food.piece_g);
   log.food_id = food.id ?? null;
   log.amount_g = grams;
   log.approx = approx;
@@ -117,9 +126,11 @@ function validCandidate(c) {
 
 function normalizeCandidate(c) {
   const serving = Number(c.serving_g);
+  const piece = Number(c.piece_g);
   return {
     name: c.name.trim(),
     serving_g: isNum(serving) && serving > 0 ? serving : null,
+    piece_g: isNum(piece) && piece > 0 && piece < 3000 ? piece : null,
     kcal_100g: Number(c.kcal_100g),
     carb_100g: Number(c.carb_100g),
     protein_100g: Number(c.protein_100g),
@@ -170,9 +181,10 @@ async function estimateInPage(name) {
   const prompt = [
     '너는 한국 음식 영양성분 추정기다. 아래 음식 하나의 일반적인 영양성분을 추정해라.',
     '브랜드(예: 서브웨이, 맥도날드)나 크기(예: 15cm, 라지)가 있으면 그 메뉴·크기 기준으로 추정하고,',
-    'serving_g는 그 크기 1개(1인분)의 중량 g으로 한다. 값은 모두 100g 기준이다.',
+    'serving_g는 1인분(1회 먹는 양)의 중량 g, piece_g는 1개(1알·1조각·1줄 등 셀 수 있는 단위 하나)의 중량 g이다.',
+    '셀 수 없는 음식(국, 밥 등)은 piece_g를 null로 한다. 예: 방울토마토 serving_g 100, piece_g 15. 값은 모두 100g 기준이다.',
     '반드시 JSON 객체 하나만 답한다. 형식:',
-    '{"name": "대표 음식명", "serving_g": 230, "kcal_100g": 160, "carb_100g": 25, "protein_100g": 5, "fat_100g": 4.5}',
+    '{"name": "대표 음식명", "serving_g": 230, "piece_g": null, "kcal_100g": 160, "carb_100g": 25, "protein_100g": 5, "fat_100g": 4.5}',
     '음식이 아니거나 알 수 없으면 {"unknown": true}',
     '',
     `음식명: ${name}`,
@@ -193,6 +205,40 @@ async function estimateInPage(name) {
     }
     return null;
   }
+}
+
+/* ===== 1개(1알·1조각) 무게 =====
+ * "방울토마토 6개"처럼 개수로 적었는데 음식에 1개 무게(piece_g)가 없으면
+ * Claude에게 1개 무게만 물어서 캐시에 더해 둠 (한 번만). 물을 수 없으면 기존 방식(1회 제공량)으로 계산. */
+async function estimatePieceInPage(name) {
+  const sample = await getSampler();
+  if (!sample || typeof sample.json !== 'function') return undefined; // 물을 수 없음
+  const prompt = [
+    '아래 음식 "1개"(1알·1조각·1줄·1마리 등 보통 세는 단위 하나)의 평균 중량을 g으로 답해라.',
+    '셀 수 없는 음식이면 null. 반드시 JSON 하나만: {"piece_g": 15}',
+    '',
+    `음식명: ${name}`,
+  ].join('\n');
+  try {
+    const v = await sample.json(prompt, { modelTier: 'quick', cache: { gcTime: 24 * 60 * 60 * 1000 } });
+    const g = Number(v && v.piece_g);
+    return isNum(g) && g > 0 && g < 3000 ? g : null;
+  } catch (err) {
+    const code = err && err.code;
+    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(code)) {
+      samplerDisabled = true;
+    }
+    return undefined;
+  }
+}
+
+async function ensurePieceWeight(key, food) {
+  if (food.piece_g > 0 || food.piece_checked) return food;
+  const g = await estimatePieceInPage(food.name || key);
+  if (g === undefined) return food; // 지금은 물을 수 없음: 다음 기회에
+  const updated = { ...food, piece_g: g, piece_checked: true };
+  updated.id = await db.upsertFood(updated);
+  return updated;
 }
 
 /* ===== 큐 ===== */
@@ -245,7 +291,8 @@ async function lookupRow(logId) {
   // 1) 캐시
   const cached = await db.getFoodByKey(key);
   if (cached) {
-    await saveIfUnchanged(logId, key, (l) => { applyFood(l, cached); l.candidates = null; });
+    const food = log.amount_unit === 'piece' ? await ensurePieceWeight(key, cached) : cached;
+    await saveIfUnchanged(logId, key, (l) => { applyFood(l, food); l.candidates = null; });
     return;
   }
 
@@ -259,7 +306,8 @@ async function lookupRow(logId) {
     if (est && est.retry) {
       await saveIfUnchanged(logId, key, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
     } else if (est) {
-      const food = await cacheChoice(key, est);
+      let food = await cacheChoice(key, est);
+      if (log.amount_unit === 'piece') food = await ensurePieceWeight(key, food);
       await saveIfUnchanged(logId, key, (l) => { applyFood(l, food, 'estimated'); l.candidates = null; });
     } else {
       await saveIfUnchanged(logId, key, (l) => { resetForLookup(l); l.lookup_status = 'not_found'; });
@@ -287,7 +335,8 @@ async function lookupRow(logId) {
 
   const ranked = rankCandidates(log.food_name, result.candidates).slice(0, MAX_CANDIDATES);
   const chosen = ranked[0];
-  const food = await cacheChoice(key, chosen);
+  let food = await cacheChoice(key, chosen);
+  if (log.amount_unit === 'piece') food = await ensurePieceWeight(key, food);
   await saveIfUnchanged(logId, key, (l) => {
     applyFood(l, food, result.status === 'estimated' || chosen.source === 'ai_estimate' ? 'estimated' : 'found');
     l.candidates = ranked.length > 1 ? ranked : null;
@@ -341,7 +390,7 @@ export async function setManualValue(logId, field, value) {
 
   if (!(log.amount_g > 0)) {
     const servingG = existing ? existing.serving_g : null;
-    const { grams, approx } = amountToGrams(log.amount_qty, log.amount_unit, servingG);
+    const { grams, approx } = amountToGrams(log.amount_qty, log.amount_unit, servingG, existing ? existing.piece_g : null);
     log.amount_g = grams;
     log.approx = approx;
   }
@@ -355,7 +404,9 @@ export async function setManualValue(logId, field, value) {
     const food = {
       name: existing ? existing.name : log.food_name,
       name_key: key,
-      serving_g: existing ? existing.serving_g : (log.amount_unit !== 'g' && !log.approx ? log.amount_g / log.amount_qty : null),
+      serving_g: existing ? existing.serving_g : (log.amount_unit === 'serving' && !log.approx ? log.amount_g / log.amount_qty : null),
+      piece_g: existing ? (existing.piece_g ?? null) : (log.amount_unit === 'piece' && !log.approx ? log.amount_g / log.amount_qty : null),
+      piece_checked: existing ? !!existing.piece_checked : false,
       kcal_100g: log.kcal * k,
       carb_100g: log.carb * k,
       protein_100g: log.protein * k,

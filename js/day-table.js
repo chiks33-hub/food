@@ -21,7 +21,8 @@ const STATUS = {
   not_found: { icon: '?', label: '못 찾음 – 탭해서 이름 수정' },
   offline: { icon: '↻', label: '오프라인 – 연결되면 다시 조회' },
 };
-const APPROX_TITLE = '1회 제공량 정보가 없어 1인분(1개) = 100g으로 계산했어요. g으로 적으면 정확해요.';
+const APPROX_TITLE = '1개 무게나 1회 제공량 정보가 없어 대략 계산했어요. g으로 적으면 정확해요.';
+const pieceRechecked = new Set(); // 이번 실행에서 1개 무게를 다시 확인한 줄
 const COLS = 4; // 음식 · 양 · kcal · 삭제
 const LONG_PRESS_MS = 550;
 const SWIPE_DELETE_PX = 90;
@@ -77,6 +78,11 @@ export async function showDate(date) {
   renderAll();
   for (const l of cur.logs) {
     if (l.lookup_status === 'pending' && !lookup.isQueued(l.id)) lookup.enqueue(l.id);
+    // "6개"처럼 개수로 적은 줄: 1개 무게가 없이 계산됐을 수 있으니 한 번 다시 확인
+    else if (l.amount_unit === 'piece' && l.approx && !pieceRechecked.has(l.id)) {
+      pieceRechecked.add(l.id);
+      lookup.enqueue(l.id);
+    }
   }
 }
 
@@ -397,7 +403,7 @@ async function commitFood(input, via) {
     input.value = log.food_name;
     updateRow(log);
     afterChange();
-    if (log.lookup_status === 'pending') lookup.enqueue(log.id);
+    if (log.lookup_status === 'pending' || (log.amount_unit === 'piece' && log.approx)) lookup.enqueue(log.id);
   } finally {
     delete input.dataset.busy;
   }
@@ -427,7 +433,7 @@ async function commitAmount(input) {
   input.value = formatAmount(log.amount_qty, log.amount_unit);
   updateRow(log);
   afterChange();
-  if (log.lookup_status === 'pending') lookup.enqueue(log.id);
+  if (log.lookup_status === 'pending' || (log.amount_unit === 'piece' && log.approx)) lookup.enqueue(log.id);
 }
 
 async function deleteRow(id) {

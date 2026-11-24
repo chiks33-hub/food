@@ -360,6 +360,7 @@ async function callClaude(q, env, withWeb) {
     '너는 한국 음식 영양성분 조사원이다. 사용자가 준 음식명 하나의 영양성분을 구한다.',
     '브랜드(예: 서브웨이, 맥도날드, 스타벅스)나 크기(예: 15cm, 30cm, 라지, 톨)가 있으면 그 브랜드의 해당 메뉴·크기 기준으로 하고,',
     'serving_g는 그 크기 1개의 중량으로 한다 (예: 서브웨이 15cm 샌드위치 1개의 g). name에는 브랜드와 크기를 포함한다.',
+    'piece_g는 셀 수 있는 음식 1개(1알·1조각·1줄)의 중량 g이다. 셀 수 없으면 null (예: 방울토마토 serving_g 100, piece_g 15).',
     '값은 모두 100g 기준으로 환산한다 (1개 기준 값만 있으면 serving_g로 나눠 100g 기준으로 바꾼다).',
   ];
   if (withWeb) {
@@ -371,7 +372,7 @@ async function callClaude(q, env, withWeb) {
   }
   lines.push(
     '마지막 답은 JSON 객체 하나만 출력한다. 설명, 마크다운, 코드블록 금지.',
-    '형식: {"name": 음식명, "serving_g": 숫자 또는 null, "kcal_100g": 숫자, "carb_100g": 숫자, "protein_100g": 숫자, "fat_100g": 숫자'
+    '형식: {"name": 음식명, "serving_g": 숫자 또는 null, "piece_g": 숫자 또는 null, "kcal_100g": 숫자, "carb_100g": 숫자, "protein_100g": 숫자, "fat_100g": 숫자'
       + (withWeb ? ', "source_url": 값을 가져온 페이지 주소 또는 null' : '') + '}',
     '음식이 아니거나 알 수 없으면 {"unknown": true} 만 출력한다.',
   );
@@ -419,6 +420,7 @@ async function callClaude(q, env, withWeb) {
   if (kcal == null || kcal < 0 || kcal > 900) return null;
   if ([carb, protein, fat].some((v) => v < 0 || v > 100) || carb + protein + fat > 105) return null;
   const serving = num(o.serving_g);
+  const piece = num(o.piece_g);
 
   // 출처: 모델이 적은 주소 > 답변 인용의 첫 주소
   let url = typeof o.source_url === 'string' && /^https?:\/\//.test(o.source_url) ? o.source_url : null;
@@ -431,6 +433,7 @@ async function callClaude(q, env, withWeb) {
   return {
     name: typeof o.name === 'string' && o.name.trim() ? o.name.trim().slice(0, 50) : q,
     serving_g: serving && serving > 0 && serving < 3000 ? round2(serving) : null,
+    piece_g: piece && piece > 0 && piece < 3000 ? round2(piece) : null,
     kcal_100g: round2(kcal),
     carb_100g: round2(carb),
     protein_100g: round2(protein),
