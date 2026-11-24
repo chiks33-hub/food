@@ -9,7 +9,7 @@ import { initDayCharts, updateDayCharts, resetDayCharts } from './day-charts.js'
 import { loadProfile, initProfile, refreshProfileView } from './profile.js';
 import { initStats, render as renderStats } from './stats.js';
 import {
-  $, $$, toast, onChange, todayStr, addDays, formatDateLabel, isValidDateStr, nameKey,
+  $, $$, el, toast, onChange, todayStr, addDays, formatDateLabel, isValidDateStr, nameKey,
 } from './util.js';
 
 const state = {
@@ -250,6 +250,47 @@ function bindEvents() {
   });
 }
 
+/* =========================================================
+ * Claude 계정 저장소일 때: 저장 오류 알림, 다른 기기 내용 다시 읽기
+ * ========================================================= */
+function showStorageInfo() {
+  const text = db.backend === 'cloud'
+    ? '기록 저장 위치: Claude 계정 (같은 계정이면 PC·폰 어디서 열어도 같은 기록)'
+    : '기록 저장 위치: 이 기기 (브라우저 데이터를 지우면 함께 지워져요)';
+  $('#profile-root').append(el('p', { className: 'storage-info', textContent: text }));
+}
+
+function bindCloudSync() {
+  db.onWriteError((err) => {
+    const code = err && err.code;
+    if (code === 'quota_exceeded') toast('저장 공간이 가득 찼어요. 오래된 기록을 지워 주세요');
+    else if (code === 'revoked' || code === 'not_granted') toast('저장 권한이 없어 기록이 저장되지 않아요');
+    else toast('저장하지 못했어요. 연결을 확인해 주세요');
+  });
+
+  let lastLoad = Date.now();
+  const refreshAll = async () => {
+    if (Date.now() - lastLoad < 30000) return;
+    if (!(await db.reload())) return;
+    lastLoad = Date.now();
+    await loadProfile();
+    refreshProfileView();
+    db.getAllLogs().then(buildFreq).catch(() => {});
+    renderCalendar();
+    if (state.day) showDate(state.day);
+    dirty.stats = true;
+    if (state.tab === 'stats' && !state.day) { dirty.stats = false; renderStats(); }
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') db.flush(); // 화면을 떠나기 전에 저장
+    else refreshAll(); // 돌아오면 다른 기기에서 바뀐 내용 반영
+  });
+  window.addEventListener('pagehide', () => { db.flush(); });
+  window.addEventListener('beforeunload', (e) => {
+    if (db.hasPendingWrites()) { db.flush(); e.preventDefault(); e.returnValue = ''; }
+  });
+}
+
 function showFatal(msg) {
   const box = $('#fatal');
   box.textContent = msg;
@@ -279,11 +320,13 @@ async function init() {
 
   initCalendar($('#view-calendar'), { onSelect: openDay });
   initProfile($('#profile-root'));
+  showStorageInfo();
   initStats($('#view-stats'));
   initDayCharts($('#day-charts'));
   initDayTable($('#day-table'), { onUpdate: (logs) => updateDayCharts(logs) });
 
   bindEvents();
+  if (db.backend === 'cloud') bindCloudSync();
 
   const hs = currentHistoryState();
   if (hs && (hs.tab || hs.day)) applyState(hs);
