@@ -81,7 +81,7 @@ export function computeTargets(p) {
 /** 운동 추천 등에서 쓰는 기본 정보 */
 export function getProfileBasics() {
   const p = profile || {};
-  return { goal: p.goal || 'maintain', sex: p.sex || null, age: p.age || null, weight_kg: p.weight_kg || null };
+  return { goal: p.goal || 'maintain', sex: p.sex || null, age: p.age || null, weight_kg: p.weight_kg || null, avoid_foods: p.avoid_foods || '' };
 }
 
 /** 평가 등에서 쓰는 목표 이름 (유지/감량/증량) */
@@ -205,6 +205,13 @@ function buildForm() {
       el('p', { className: 'error', id: 'pf-error', role: 'alert' })),
 
     el('section', { className: 'card' },
+      el('h2', { className: 'card-title', textContent: '메뉴 추천 설정' }),
+      el('label', { className: 'pf-field' },
+        el('span', { className: 'pf-label', textContent: '피할 음식 (알레르기·싫어하는 음식, 쉼표로 구분)' }),
+        el('input', { name: 'avoid_foods', type: 'text', maxLength: 200, autocomplete: 'off', placeholder: '예: 땅콩, 새우, 오이' })),
+      el('p', { className: 'hint', textContent: '점심·저녁 추천에서 이 음식은 빼고 추천해요.' })),
+
+    el('section', { className: 'card' },
       el('h2', { className: 'card-title', textContent: '체중 기록' }),
       el('div', { className: 'weight-add' },
         el('input', { type: 'date', name: 'w_date', 'aria-label': '날짜' }),
@@ -224,6 +231,7 @@ function render() {
   setIfIdle(f.age, p.age);
   for (const r of f.sex) r.checked = r.value === p.sex;
   f.activity.value = String(p.activity || 1.55);
+  setIfIdle(f.avoid_foods, p.avoid_foods || '');
   for (const r of f.goal) r.checked = r.value === (p.goal || 'maintain');
   for (const r of f.target_mode) r.checked = r.value === (p.target_kcal_locked ? 'manual' : 'auto');
   if (!f.w_date.value) f.w_date.value = todayStr();
@@ -319,6 +327,8 @@ function bind() {
       return;
     } else if (name === 'sex' || name === 'goal') {
       profile[name] = t.value;
+    } else if (name === 'avoid_foods') {
+      profile.avoid_foods = t.value.trim().slice(0, 200);
     } else if (name === 'activity') {
       profile.activity = Number(t.value);
     } else if (name === 'target_mode') {

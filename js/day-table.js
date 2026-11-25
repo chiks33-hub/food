@@ -10,6 +10,7 @@
 import * as db from './db.js';
 import * as lookup from './lookup.js';
 import { parseEntry, parseAmount, formatAmount } from './parse.js';
+import { canRecommend, recommendMeal, prepareRecommended } from './recommend.js';
 import { MEAL_LABEL, el, toast, emitChange, nameKey, isNum, fmtInt, parseNum, round } from './util.js';
 
 const SECTIONS = ['breakfast', 'lunch', 'dinner', 'snack'];
@@ -178,12 +179,84 @@ function chipsRow(log) {
         el('button', { type: 'button', className: 'chip-close', textContent: '×', 'aria-label': '후보 닫기' }))));
 }
 
+const REC_MEALS = ['lunch', 'dinner'];
+let recAvailable = false; // Claude 메뉴 추천을 쓸 수 있는지 (아티팩트에서만)
+const recShown = new Map(); // `${date}:${meal}` → 이미 보여 준 메뉴 이름들
+
 function sectionHead(meal) {
   return el('tr', { className: 'sec-head', dataset: { meal } },
     el('td', { colSpan: COLS },
       el('div', { className: 'sec-line' },
         el('b', { textContent: MEAL_LABEL[meal] }),
-        el('span', { className: 'sec-kcal' }))));
+        el('span', { className: 'sec-right' },
+          el('span', { className: 'sec-kcal' }),
+          REC_MEALS.includes(meal)
+            ? el('button', { type: 'button', className: 'rec-btn', dataset: { meal }, hidden: !recAvailable, textContent: '추천' })
+            : null))));
+}
+
+/* ===== 메뉴 추천 ===== */
+function recRow(meal) {
+  return tbody.querySelector(`tr.rec-row[data-meal="${meal}"]`);
+}
+
+async function showRecommendations(meal) {
+  const head = tbody.querySelector(`tr.sec-head[data-meal="${meal}"]`);
+  if (!head) return;
+  let row = recRow(meal);
+  if (!row) {
+    row = el('tr', { className: 'rec-row', dataset: { meal } }, el('td', { colSpan: COLS }));
+    head.after(row);
+  }
+  const td = row.firstChild;
+  if (row.dataset.busy) return;
+  row.dataset.busy = '1';
+  const btn = head.querySelector('.rec-btn');
+  if (btn) btn.disabled = true;
+  td.replaceChildren(el('p', { className: 'rec-loading', textContent: `Claude가 ${MEAL_LABEL[meal]} 메뉴를 고르는 중…` }));
+  const key = `${cur.date}:${meal}`;
+  const shown = recShown.get(key) || [];
+  try {
+    const { budget, options } = await recommendMeal(cur.date, meal, cur.logs, shown);
+    recShown.set(key, [...shown, ...options.map((o) => o.name)].slice(-24));
+    if (!row.isConnected) return;
+    td.replaceChildren(
+      el('div', { className: 'rec-head' },
+        el('span', { textContent: budget ? `${MEAL_LABEL[meal]}에 약 ${fmtInt(budget)} kcal 추천` : `${MEAL_LABEL[meal]} 추천` }),
+        el('span', {},
+          el('button', { type: 'button', className: 'rec-more', dataset: { meal }, textContent: '다른 추천' }),
+          el('button', { type: 'button', className: 'rec-close', 'aria-label': '추천 닫기', textContent: '×' }))),
+      el('ul', { className: 'rec-list' }, ...options.map((o) => el('li', {},
+        el('div', { className: 'rec-text' },
+          el('b', { textContent: `${o.name}${o.amount ? ` ${o.amount}` : ''}` }),
+          el('small', { textContent: [o.kcal != null ? `약 ${fmtInt(o.kcal)} kcal` : '', o.reason].filter(Boolean).join(' · ') })),
+        el('button', {
+          type: 'button',
+          className: 'rec-add',
+          dataset: { meal, opt: JSON.stringify(o) },
+          textContent: '+ 추가',
+        })))));
+  } catch (err) {
+    if (row.isConnected) {
+      const msg = err && err.code === 'not_granted' ? 'Claude 사용이 허용되지 않았어요.' : '추천을 받지 못했어요. 다시 눌러 주세요.';
+      td.replaceChildren(el('div', { className: 'rec-head' },
+        el('span', { textContent: msg }),
+        el('button', { type: 'button', className: 'rec-close', 'aria-label': '추천 닫기', textContent: '×' })));
+    }
+  } finally {
+    delete row.dataset.busy;
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function addRecommended(meal, opt) {
+  let o;
+  try { o = JSON.parse(opt); } catch (err) { return; }
+  const text = await prepareRecommended(o);
+  const job = blankChain.then(() => createFromBlank(text, meal));
+  blankChain = job.catch((err) => console.error('줄 저장 실패', err));
+  const log = await job;
+  if (log) toast(`${MEAL_LABEL[meal]}에 "${log.food_name}" 추가`);
 }
 
 function blankRow(meal) {
@@ -219,6 +292,12 @@ function renderAll() {
   if (!cur.snackOpen) parts.push(snackAddRow());
   tbody.replaceChildren(...parts);
   afterChange();
+  if (!recAvailable) {
+    canRecommend().then((ok) => {
+      recAvailable = ok;
+      if (ok) for (const b of tbody.querySelectorAll('.rec-btn')) b.hidden = false;
+    }).catch(() => {});
+  }
 }
 
 function renderTotals() {
@@ -737,6 +816,16 @@ function bindEvents() {
       const id = Number(close.closest('tr').dataset.for);
       await lookup.dismissCandidates(id);
       await refreshRow(id);
+      return;
+    }
+    const rec = e.target.closest('.rec-btn, .rec-more');
+    if (rec) { showRecommendations(rec.dataset.meal); return; }
+    if (e.target.closest('.rec-close')) { e.target.closest('tr.rec-row')?.remove(); return; }
+    const add = e.target.closest('.rec-add');
+    if (add) {
+      add.disabled = true;
+      add.textContent = '추가됨';
+      await addRecommended(add.dataset.meal, add.dataset.opt);
       return;
     }
     if (e.target.closest('.snack-add')) {
