@@ -357,6 +357,9 @@ h1, h2, h3 { margin: 0; }
 .grid td.num { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; user-select: none; -webkit-user-select: none; }
 .grid td.num.loading::after { content: "·"; color: var(--muted); }
 .grid td.num.editing { padding: 0; }
+.grid tr.row:not(.blank) td.num { cursor: text; }
+.grid tr.row:not(.blank) td.num:not(.editing):hover { background: var(--primary-soft); }
+.grid tr.row:not(.blank) td.num:empty::before { content: "입력"; color: var(--muted); font-weight: 500; font-size: 12px; }
 
 .grid input {
   width: 100%;

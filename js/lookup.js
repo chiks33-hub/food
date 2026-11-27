@@ -274,9 +274,11 @@ export async function retryPending() {
 }
 
 /** 상태만 바꿔 저장 (조회 도중 줄이 수정·삭제됐으면 저장하지 않음) */
-async function saveIfUnchanged(logId, key, mutate) {
+async function saveIfUnchanged(logId, key, started, mutate) {
   const log = await db.getLog(logId);
   if (!log || nameKey(log.food_name) !== key) return null;
+  // 조회하는 사이 사용자가 kcal을 직접 넣었으면 그 값을 그대로 둠
+  if (log.manual_at && log.manual_at >= started) return null;
   mutate(log);
   await db.putLog(log);
   emitChange({ kind: 'logs', date: log.date, id: log.id });
@@ -287,49 +289,50 @@ async function lookupRow(logId) {
   const log = await db.getLog(logId);
   if (!log || !log.food_name) return;
   const key = nameKey(log.food_name);
+  const started = Date.now();
 
   // 1) 캐시
   const cached = await db.getFoodByKey(key);
   if (cached) {
     const food = log.amount_unit === 'piece' ? await ensurePieceWeight(key, cached) : cached;
-    await saveIfUnchanged(logId, key, (l) => { applyFood(l, food); l.candidates = null; });
+    await saveIfUnchanged(logId, key, started, (l) => { applyFood(l, food); l.candidates = null; });
     return;
   }
 
   // 2) 프록시가 없을 때: Claude 화면(아티팩트) 안에서 열렸으면 Claude에게 직접 추정을 요청
   if (!proxyConfigured()) {
     if (!navigator.onLine) {
-      await saveIfUnchanged(logId, key, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
+      await saveIfUnchanged(logId, key, started, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
       return;
     }
     const est = await estimateInPage(log.food_name);
     if (est && est.retry) {
-      await saveIfUnchanged(logId, key, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
+      await saveIfUnchanged(logId, key, started, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
     } else if (est) {
       let food = await cacheChoice(key, est);
       if (log.amount_unit === 'piece') food = await ensurePieceWeight(key, food);
-      await saveIfUnchanged(logId, key, (l) => { applyFood(l, food, 'estimated'); l.candidates = null; });
+      await saveIfUnchanged(logId, key, started, (l) => { applyFood(l, food, 'estimated'); l.candidates = null; });
     } else {
-      await saveIfUnchanged(logId, key, (l) => { resetForLookup(l); l.lookup_status = 'not_found'; });
+      await saveIfUnchanged(logId, key, started, (l) => { resetForLookup(l); l.lookup_status = 'not_found'; });
     }
     return;
   }
   if (!navigator.onLine) {
-    await saveIfUnchanged(logId, key, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
+    await saveIfUnchanged(logId, key, started, (l) => { resetForLookup(l); l.lookup_status = 'offline'; });
     return;
   }
   // 조회 중 표시
   if (log.lookup_status !== 'pending') {
-    await saveIfUnchanged(logId, key, (l) => resetForLookup(l));
+    await saveIfUnchanged(logId, key, started, (l) => resetForLookup(l));
   }
 
   const result = await fetchProxy(log.food_name);
   if (result.retry) {
-    await saveIfUnchanged(logId, key, (l) => { l.lookup_status = 'offline'; l.updated_at = Date.now(); });
+    await saveIfUnchanged(logId, key, started, (l) => { l.lookup_status = 'offline'; l.updated_at = Date.now(); });
     return;
   }
   if (result.status === 'not_found') {
-    await saveIfUnchanged(logId, key, (l) => { l.lookup_status = 'not_found'; l.candidates = null; l.updated_at = Date.now(); });
+    await saveIfUnchanged(logId, key, started, (l) => { l.lookup_status = 'not_found'; l.candidates = null; l.updated_at = Date.now(); });
     return;
   }
 
@@ -337,7 +340,7 @@ async function lookupRow(logId) {
   const chosen = ranked[0];
   let food = await cacheChoice(key, chosen);
   if (log.amount_unit === 'piece') food = await ensurePieceWeight(key, food);
-  await saveIfUnchanged(logId, key, (l) => {
+  await saveIfUnchanged(logId, key, started, (l) => {
     applyFood(l, food, result.status === 'estimated' || chosen.source === 'ai_estimate' ? 'estimated' : 'found');
     l.candidates = ranked.length > 1 ? ranked : null;
     l.candidate_index = 0;
@@ -419,6 +422,7 @@ export async function setManualValue(logId, field, value) {
   }
   log.lookup_status = 'found';
   log.candidates = null;
+  log.manual_at = Date.now();
   log.updated_at = Date.now();
   await db.putLog(log);
   emitChange({ kind: 'logs', date: log.date, id: log.id });

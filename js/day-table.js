@@ -4,7 +4,7 @@
 // - Enter = 다음 줄(빈 줄에서는 같은 구역 빈 줄에 계속 입력), Tab = 다음 칸
 // - 칸을 고치면 즉시 저장, 영양 조회는 비동기(lookup.js)
 // - 줄 삭제: × 버튼 / 왼쪽 스와이프 / 음식 칸 비우고 Enter (되돌리기 토스트)
-// - kcal은 자동. 길게 누르면 직접 수정(→ 음식 캐시 manual 갱신)
+// - kcal은 자동. 칸을 누르면 직접 입력(→ 음식 캐시 manual 갱신). "라면 1개 500kcal"처럼 써도 됨
 // - 음식 칸 자동완성: 이전 기록 이름 빈도순 최대 5개
 
 import * as db from './db.js';
@@ -25,7 +25,6 @@ const STATUS = {
 const APPROX_TITLE = '1개 무게나 1회 제공량 정보가 없어 대략 계산했어요. g으로 적으면 정확해요.';
 const pieceRechecked = new Set(); // 이번 실행에서 1개 무게를 다시 확인한 줄
 const COLS = 4; // 음식 · 양 · kcal · 삭제
-const LONG_PRESS_MS = 550;
 const SWIPE_DELETE_PX = 90;
 
 const cur = {
@@ -152,6 +151,7 @@ function rowEls(log) {
   tr.append(el('td', {
     className: `num${log.lookup_status === 'pending' ? ' loading' : ''}`,
     dataset: { field: 'kcal' },
+    title: '눌러서 kcal 직접 입력',
     textContent: kcalText(log.kcal),
   }));
   tr.append(el('td', { className: 'td-del' },
@@ -392,7 +392,16 @@ function nextOrder() {
 }
 
 /** 빈 줄에서 새 기록 생성 (text, meal은 Enter 시점에 확정한 값) */
-async function createFromBlank(text, meal) {
+/** "라면 1개 500kcal" → { text: '라면 1개', kcal: 500 } */
+function splitKcal(text) {
+  const m = String(text || '').match(/\s*(\d+(?:\.\d+)?)\s*(?:kcal|칼로리|키로|칼)\s*$/i);
+  if (!m) return { text, kcal: null };
+  const rest = text.slice(0, m.index).trim();
+  return rest ? { text: rest, kcal: Number(m[1]) } : { text, kcal: null };
+}
+
+async function createFromBlank(input, meal) {
+  const { text, kcal: typedKcal } = splitKcal(input);
   const p = parseEntry(text);
   if (!p.name) return null;
   const now = Date.now();
@@ -414,9 +423,22 @@ async function createFromBlank(text, meal) {
     created_at: now,
     updated_at: now,
   };
+  if (typedKcal != null) {
+    log.kcal = typedKcal; log.carb = 0; log.protein = 0; log.fat = 0;
+    log.lookup_status = 'found';
+  }
   log.id = await db.putLog(log); // 줄을 먼저 저장
   emitChange({ kind: 'logs', date, id: log.id, local: true });
-  lookup.enqueue(log.id); // 조회는 기다리지 않음
+  if (typedKcal != null) {
+    // 직접 쓴 칼로리 → 이 음식의 캐시에도 저장 (양을 g로 알 수 있을 때)
+    lookup.setManualValue(log.id, 'kcal', typedKcal).then(async () => {
+      const fresh = await db.getLog(log.id);
+      const l = findLog(log.id);
+      if (fresh && l) { Object.assign(l, fresh); updateRow(l); afterChange(); }
+    }).catch((err) => console.error('kcal 저장 실패', err));
+  } else {
+    lookup.enqueue(log.id); // 조회는 기다리지 않음
+  }
   bumpFreq(log.food_name);
   if (cur.date !== date) return log; // 그 사이 다른 날로 이동
   cur.logs.push(log);
@@ -633,7 +655,7 @@ async function acPick(name) {
 }
 
 /* =========================================================
- * kcal 직접 수정 (길게 누르기)
+ * kcal 직접 입력 (칸 누르기)
  * ========================================================= */
 function openNumEditor(td) {
   const tr = td.closest('tr');
@@ -643,7 +665,7 @@ function openNumEditor(td) {
   const input = el('input', {
     className: 'c-num', type: 'text', inputMode: 'decimal',
     value: isNum(log.kcal) ? String(round(log.kcal, 1)) : '',
-    'aria-label': 'kcal 직접 수정',
+    'aria-label': 'kcal 직접 입력', placeholder: 'kcal',
   });
   td.replaceChildren(input);
   td.classList.add('editing');
@@ -664,7 +686,7 @@ function openNumEditor(td) {
         updateRow(log);
         afterChange();
       }
-      toast('값을 고쳤어요. 이 음식의 다음 기록에도 적용돼요');
+      toast('kcal을 저장했어요. 이 음식의 다음 기록에도 적용돼요');
     } else {
       td.textContent = kcalText(log.kcal);
     }
@@ -688,7 +710,7 @@ async function onStatusClick(st) {
   const input = tr.querySelector('.c-food');
   if (log.lookup_status === 'not_found') {
     focusEl(input);
-    toast('이름을 고쳐서 Enter를 누르면 다시 찾아요');
+    toast('이름을 고쳐서 Enter를 누르거나, kcal 칸을 눌러 직접 입력하세요');
   } else if (log.lookup_status === 'offline') {
     lookup.enqueue(log.id);
     toast(navigator.onLine ? '다시 조회할게요' : '오프라인이에요. 연결되면 자동으로 조회해요');
@@ -699,8 +721,8 @@ async function onStatusClick(st) {
     let host = '';
     if (m) { try { host = new URL(m[1]).hostname.replace(/^www\./, ''); } catch (err) { host = ''; } }
     toast(host
-      ? `웹 검색으로 찾은 값이에요 (${host}). 길게 눌러 고칠 수 있어요`
-      : 'AI 추정값이에요. kcal을 길게 눌러 고칠 수 있어요');
+      ? `웹 검색으로 찾은 값이에요 (${host}). kcal 칸을 눌러 고칠 수 있어요`
+      : 'AI 추정값이에요. kcal 칸을 눌러 고칠 수 있어요');
   } else if (log.lookup_status === 'found') {
     toast('영양값이 확인된 음식이에요');
   }
@@ -835,27 +857,11 @@ function bindEvents() {
     }
   });
 
-  // kcal 칸 길게 누르기
-  let pressTimer = 0;
-  let pressStart = null;
-  const cancelPress = () => { clearTimeout(pressTimer); pressStart = null; };
-  tbody.addEventListener('pointerdown', (e) => {
+  // kcal 칸 누르기 → 직접 입력
+  tbody.addEventListener('click', (e) => {
     const td = e.target.closest('td.num');
     if (!td || !td.closest('tr.row:not(.blank)') || td.querySelector('input')) return;
-    pressStart = { x: e.clientX, y: e.clientY };
-    clearTimeout(pressTimer);
-    pressTimer = setTimeout(() => {
-      pressStart = null;
-      openNumEditor(td);
-    }, LONG_PRESS_MS);
-  });
-  tbody.addEventListener('pointerup', cancelPress);
-  tbody.addEventListener('pointercancel', cancelPress);
-  tbody.addEventListener('pointermove', (e) => {
-    if (pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) cancelPress();
-  });
-  tbody.addEventListener('contextmenu', (e) => {
-    if (e.target.closest('td.num')) e.preventDefault();
+    openNumEditor(td);
   });
 
   // 왼쪽 스와이프 삭제
